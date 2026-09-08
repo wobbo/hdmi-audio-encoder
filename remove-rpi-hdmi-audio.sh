@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # 2026-09-08
-# RPi HDMI Audio v4 - complete remover
+# Ernst Lanser <ernst.lanser@gmail.com>
+# RPi HDMI Audio v5 - complete remover
 
 set -euo pipefail
 trap 'printf "\n    Removal failed\n\n"' ERR
