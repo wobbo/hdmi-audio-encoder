@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # 2026-09-08
-# RPi HDMI Audio v4 - complete installer for Raspberry Pi 5 / 500+ Debian GNOME
+# Ernst Lanset <ernst.lanser@wobbo.org>
+# RPi HDMI Audio v5 - complete installer for Raspberry Pi 5 / 500+ Debian GNOME
 
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
