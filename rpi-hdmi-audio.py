@@ -1427,10 +1427,15 @@ class AudioWindow(
             "audio-card"
         )
 
+        # Keep the window at one fixed size. The application only contains
+        # four audio choices and status information, so resizing would add no
+        # useful space and would make the compact control window inconsistent.
         self.set_default_size(
-            520,
-            390,
+            400,
+            580,
         )
+
+        self.set_resizable(False)
 
         self.switch_locked = False
         self.switch_started_at = 0.0
