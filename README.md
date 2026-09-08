@@ -29,7 +29,7 @@ Complete test bundle for Raspberry Pi 5 / Raspberry Pi 500+ on Debian 13 GNOME.
 You do **not** need to uninstall the previous version first. The installer overwrites the application and launcher, removes known obsolete experimental files, and preserves the current or previously saved selection.
 
 ```bash
-cd rpi-hdmi-audio-total-2026-09-08-v4
+cd rpi-hdmi-audio-total-2026-09-08-v5
 chmod +x install-rpi-hdmi-audio.sh
 sudo ./install-rpi-hdmi-audio.sh
 ```
