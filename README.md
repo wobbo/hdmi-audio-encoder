@@ -2,6 +2,8 @@
 
 Complete test bundle for Raspberry Pi 5 / Raspberry Pi 500+ on Debian 13 GNOME.
 
+<img height="400" alt="image" src="https://github.com/user-attachments/assets/9e72da99-e52b-4f90-a208-5ab2b4a14574" />
+
 ## What this version does
 
 - HDMI 0 - Stereo 2.0
@@ -37,6 +39,7 @@ Select the desired output once in **RPi HDMI Audio**. Every successful selection
 ## Remove
 
 ```bash
+chmod +x remove-rpi-hdmi-audio.sh
 sudo ./remove-rpi-hdmi-audio.sh
 ```
 
