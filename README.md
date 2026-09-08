@@ -19,6 +19,9 @@ Complete test bundle for Raspberry Pi 5 / Raspberry Pi 500+ on Debian 13 GNOME.
 - Dolby sinks disable idle suspend while selected, so an automatically restored Dolby output remains usable even when no media was playing during login.
 - If automatic restoration fails, normal HDMI 0 Stereo is restored so GNOME does not remain on Dummy Output.
 
+<img height="320" alt="image" src="https://github.com/user-attachments/assets/8e2075f5-c04b-47cc-990a-4859af3617d1" />
+<img height="320" alt="image" src="https://github.com/user-attachments/assets/b0a0d8a9-33c4-4ef1-9438-97e49140803f" />
+
 ## Upgrade / install
 
 You do **not** need to uninstall the previous version first. The installer overwrites the application and launcher, removes known obsolete experimental files, and preserves the current or previously saved selection.
