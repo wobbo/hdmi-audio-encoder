@@ -26,14 +26,18 @@ from gi.repository import Adw, Gio, GLib, Gtk
 #     Prevents another click while a switch is still starting.
 #
 # AC3_PRIME_SECONDS:
-#     Sends silent six-channel audio through the A52 encoder before and
-#     during the moment that real application audio is moved to Dolby.
+#     Sends silent six-channel audio through the selected surround encoder
+#     before and during the moment that real application audio is moved to
+#     Dolby Digital or DTS. The historical variable name is kept for
+#     compatibility with earlier versions.
 #
 # AC3_PRIME_LEAD_SECONDS:
-#     How long Dolby runs before real application audio is moved to it.
+#     How long the encoded surround stream runs before real application audio
+#     is moved to it.
 # ===========================================================================
 
 APP_ID = "org.wobbo.RPiHDMIAudio"
+# Keep the existing application ID and state path for upgrade compatibility.
 
 # The last successful user selection is stored as application state.
 # This is not a PipeWire or WirePlumber configuration file. It only lets the
@@ -68,9 +72,11 @@ CARD1 = "alsa_card.platform-107c706400.hdmi"
 
 PROFILE_STEREO = "output:hdmi-stereo"
 PROFILE_AC3 = "output:hdmi-ac3"
+PROFILE_DTS = "output:hdmi-dts"
 
 MODE_STEREO = "stereo"
 MODE_AC3 = "ac3"
+MODE_DTS = "dts"
 
 
 # ===========================================================================
@@ -108,24 +114,26 @@ HOLDING_DESCRIPTION = "HDMI"
 # ===========================================================================
 # AUDIO OUTPUT DEFINITIONS
 #
-# These are the four choices shown in the application.
+# These are the six choices shown in the application.
 #
 # Stereo opens the normal HDMI PCM device.
 #
-# Dolby Digital opens the ALSA A52 plugin:
+# Dolby Digital opens the ALSA A52 plugin. DTS opens the ALSA dcaenc plugin.
+# Both surround modes accept six-channel PCM from PipeWire and encode it in
+# real time before sending it over HDMI:
 #
 #     application PCM 5.1
 #          -> PipeWire
 #          -> module-alsa-sink
-#          -> ALSA A52 encoder
-#          -> AC-3 / Dolby Digital
+#          -> ALSA A52 or dcaenc encoder
+#          -> AC-3 / Dolby Digital or DTS
 #          -> HDMI
 #          -> HDMI audio extractor
 #          -> TOSLINK
 #          -> Sony receiver
 #
-# The simple A52 device strings below are the same method that worked in the
-# successful manual module-alsa-sink test.
+# DTS uses dcahdmi with IEC61937 wrapping. The dcaenc ALSA plugin does not
+# provide reliable mmap support, so mmap is disabled only for DTS sinks.
 # ===========================================================================
 
 
@@ -148,6 +156,8 @@ class Choice:
 
     channels: int
     channel_map: str
+
+    mmap: bool = True
 
 
 CHOICES = (
@@ -202,6 +212,35 @@ CHOICES = (
     ),
 
     Choice(
+        key="hdmi0-dts",
+        title="HDMI 0 · DTS 5.1",
+        subtitle="Realtime DTS 5.1 for HDMI → TOSLINK → receiver",
+
+        card=CARD0,
+        other_card=CARD1,
+
+        mode=MODE_DTS,
+        profile=PROFILE_DTS,
+
+        alsa_device="dcahdmi:CARD=vc4hdmi0,DEV=0,IEC61937=1",
+
+        sink_name="rpi_hdmi_audio_hdmi0_dts",
+        description="HDMI 0 - DTS 5.1",
+
+        channels=6,
+        channel_map=(
+            "front-left,"
+            "front-right,"
+            "rear-left,"
+            "rear-right,"
+            "front-center,"
+            "lfe"
+        ),
+
+        mmap=False,
+    ),
+
+    Choice(
         key="hdmi1-stereo",
         title="HDMI 1 · Stereo 2.0",
         subtitle="PCM stereo for monitor / normal HDMI audio",
@@ -250,6 +289,35 @@ CHOICES = (
             "lfe"
         ),
     ),
+
+    Choice(
+        key="hdmi1-dts",
+        title="HDMI 1 · DTS 5.1",
+        subtitle="Realtime DTS 5.1 for HDMI → TOSLINK → receiver",
+
+        card=CARD1,
+        other_card=CARD0,
+
+        mode=MODE_DTS,
+        profile=PROFILE_DTS,
+
+        alsa_device="dcahdmi:CARD=vc4hdmi1,DEV=0,IEC61937=1",
+
+        sink_name="rpi_hdmi_audio_hdmi1_dts",
+        description="HDMI 1 - DTS 5.1",
+
+        channels=6,
+        channel_map=(
+            "front-left,"
+            "front-right,"
+            "rear-left,"
+            "rear-right,"
+            "front-center,"
+            "lfe"
+        ),
+
+        mmap=False,
+    ),
 )
 
 
@@ -273,8 +341,10 @@ CHOICE_BY_SINK = {
 #
 #     hdmi0-stereo
 #     hdmi0-ac3
+#     hdmi0-dts
 #     hdmi1-stereo
 #     hdmi1-ac3
+#     hdmi1-dts
 #
 # At the next GNOME login the hidden --restore mode reads this tiny state file
 # and rebuilds the same direct sink without opening the application window.
@@ -330,9 +400,12 @@ def load_choice_state() -> Choice | None:
 
 LEGACY_SINKS = {
     "rpi_test_ac3": "hdmi0-ac3",
+    "rpi_test_dts": "hdmi0-dts",
 
     "hdmi0_ac3": "hdmi0-ac3",
     "hdmi1_ac3": "hdmi1-ac3",
+    "hdmi0_dts": "hdmi0-dts",
+    "hdmi1_dts": "hdmi1-dts",
 
     "hdmi0_stereo": "hdmi0-stereo",
     "hdmi1_stereo": "hdmi1-stereo",
@@ -376,14 +449,13 @@ def run(
 #
 #     sink_properties='device.description="HDMI 0 - Test Name"'
 #
-# Dolby Digital needs one additional property. During an automatic login
+# Encoded surround needs one additional property. During an automatic login
 # restore there may be no application audio yet. WirePlumber normally suspends
-# an idle ALSA sink after a few seconds. The A52/AC-3 path on this Raspberry Pi
-# can fail to recover from that suspend, which is why Dolby may look selected
-# after a reboot but remain silent until it is restarted manually.
+# an idle ALSA sink after a few seconds. The AC-3 and DTS paths can lose the
+# receiver lock or fail to recover cleanly after that suspend.
 #
-# For Dolby only, session.suspend-timeout-seconds=0 keeps the ALSA A52 sink
-# open while it is selected. Stereo keeps the normal power-saving behaviour.
+# For Dolby Digital and DTS, session.suspend-timeout-seconds=0 keeps the ALSA
+# sink open while it is selected. Stereo keeps normal power-saving behaviour.
 # This is carried by the sink itself, so no extra WirePlumber configuration
 # file is required.
 # ===========================================================================
@@ -940,9 +1012,9 @@ def wait_for_sink(
 
 
 # ===========================================================================
-# CREATE THE REAL STEREO OR DOLBY SINK
+# CREATE THE REAL STEREO, DOLBY OR DTS SINK
 #
-# We use module-alsa-sink for both.
+# We use module-alsa-sink for all three modes.
 #
 # The difference is the ALSA device:
 #
@@ -951,6 +1023,9 @@ def wait_for_sink(
 #
 # Dolby:
 #     plug -> a52 -> hdmi:CARD=...
+#
+# DTS:
+#     dcahdmi:CARD=...,DEV=0,IEC61937=1
 #
 # A human-readable device.description is supplied so GNOME Settings shows:
 #
@@ -989,11 +1064,20 @@ def load_choice_sink(
 
                 f"channel_map={choice.channel_map}",
 
+                *(
+                    ["mmap=0"]
+                    if not choice.mmap
+                    else []
+                ),
+
                 "tsched=0",
 
                 sink_properties_argument(
                     choice.description,
-                    keep_open=(choice.mode == MODE_AC3),
+                    keep_open=(
+                        choice.mode
+                        in (MODE_AC3, MODE_DTS)
+                    ),
                 ),
             ],
             check=False,
@@ -1062,18 +1146,18 @@ def load_choice_sink(
 
 
 # ===========================================================================
-# DOLBY DIGITAL PRIMING
+# ENCODED SURROUND PRIMING
 #
-# The A52 sink does not output meaningful Dolby frames until PCM audio reaches
-# it.
+# The AC-3 and DTS sinks do not output meaningful encoded frames until PCM
+# audio reaches them.
 #
 # Before YouTube is moved from the holding sink, this function starts a short
 # stream of silent six-channel PCM.
 #
-# ALSA encodes that silence as real AC-3.
+# ALSA encodes that silence as real AC-3 or DTS.
 #
-# The Sony therefore gets a chance to recognise Dolby Digital BEFORE the
-# browser audio arrives.
+# The receiver therefore gets a chance to recognise the selected surround
+# format BEFORE the browser audio arrives.
 #
 # The silent stream remains active for a short period AFTER real application
 # audio is moved, avoiding a gap between "Dolby startup" and real sound.
@@ -1280,13 +1364,13 @@ def activate_choice(
 
     prime_thread: threading.Thread | None = None
 
-    if choice.mode == MODE_AC3:
+    if choice.mode in (MODE_AC3, MODE_DTS):
 
         prime_thread = start_ac3_prime(
             choice.sink_name
         )
 
-        # Give the Sony a short head start on the AC-3 stream.
+        # Give the receiver a short head start on the encoded stream.
 
         time.sleep(
             AC3_PRIME_LEAD_SECONDS
@@ -1420,19 +1504,19 @@ class AudioWindow(
         )
 
         self.set_title(
-            "RPi HDMI Audio"
+            "HDMI Audio Encoder"
         )
 
         self.set_icon_name(
             "audio-card"
         )
 
-        # Keep the window at one fixed size. The application only contains
-        # four audio choices and status information, so resizing would add no
+        # Keep the window at one fixed size. The application contains six
+        # audio choices and status information, so resizing would add no
         # useful space and would make the compact control window inconsistent.
         self.set_default_size(
             400,
-            580,
+            720,
         )
 
         self.set_resizable(False)
@@ -1563,7 +1647,7 @@ class AudioWindow(
 
 
         # -------------------------------------------------------------------
-        # DOLBY INFORMATION
+        # ENCODED SURROUND INFORMATION
         #
         # The application deliberately does not change monitor volume.
         # -------------------------------------------------------------------
@@ -1577,9 +1661,9 @@ class AudioWindow(
         )
 
         info = Adw.ActionRow(
-            title="Dolby Digital 5.1",
+            title="Dolby Digital / DTS 5.1",
             subtitle=(
-                "A monitor without an AC-3 decoder "
+                "A monitor without an AC-3 or DTS decoder "
                 "may produce loud digital noise. "
                 "This application does not change "
                 "monitor volume settings."
@@ -1686,7 +1770,7 @@ class AudioWindow(
     # Selecting the already-active row is allowed.
     #
     # That performs a complete reconnect, which is useful if the receiver
-    # ever fails to lock onto Dolby Digital.
+    # ever fails to lock onto Dolby Digital or DTS.
     # =======================================================================
 
     def on_row_activated(
@@ -1850,7 +1934,7 @@ class AudioWindow(
 # The installer starts this same program once at GNOME login with --restore.
 # No application window is opened. The restore mode waits for PipeWire and the
 # required Raspberry Pi HDMI card, reads the last successful user selection,
-# and rebuilds that exact Stereo or Dolby sink.
+# and rebuilds that exact Stereo, Dolby or DTS sink.
 #
 # If no saved selection exists yet, HDMI 0 Stereo 2.0 is used. If rebuilding
 # the saved direct sink fails, normal GNOME HDMI 0 Stereo is restored as a safe
