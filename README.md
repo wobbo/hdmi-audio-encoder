@@ -25,7 +25,7 @@ Eight output modes are available:
 
 <img height="300" alt="ChatGPT Image 11 sep 2026, 17_06_59" src="https://github.com/user-attachments/assets/800da03a-f9a3-4516-95fe-243715e95761" /><img height="300" alt="ChatGPT Image 11 sep 2026, 17_09_48" src="https://github.com/user-attachments/assets/2f007abe-a36d-4bd1-ab21-c5504fb35bf4" />
 
-<img height="100" alt="image" src="https://github.com/user-attachments/assets/3639dd01-d443-465f-9fd2-c429d69ddd7a" />
+
 
 
 <img width="400" alt="32095901M" src="https://github.com/user-attachments/assets/3436619c-7d40-421f-aaca-8753d0fce8de" />
@@ -175,3 +175,5 @@ sudo ./remove-rpi-hdmi-audio.sh
 ~~~
 
 The removal script removes RPi HDMI Audio, its launcher and background components, and restores the normal system HDMI audio configuration.
+
+<img height="100" alt="image" src="https://github.com/user-attachments/assets/3639dd01-d443-465f-9fd2-c429d69ddd7a" />
