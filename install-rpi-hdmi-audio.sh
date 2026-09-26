@@ -1,261 +1,302 @@
-#!/bin/bash
-
-# 2026-09-09
-# Ernst Lanser <ernst.lanser@wobbo.org>
-# HDMI Audio Encoder v6 - installer for Raspberry Pi 5 / 500+ Debian 13 GNOME
-
+#!/usr/bin/env bash
+# HDMI Audio Encoder 16.4 herzien - Raspberry Pi 5 / 500+, Debian 13 desktop.
+# Run as your desktop user: sudo ./install-rpi-hdmi-audio.sh
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
-BUILD_DIR=""
-cleanup() {
-    if [ -n "$BUILD_DIR" ] && [ -d "$BUILD_DIR" ]; then
-        rm -rf "$BUILD_DIR"
-    fi
-}
-trap cleanup EXIT
-trap 'printf "\n    Installation failed\n\n"' ERR
-
-clear
-printf "\n"
-printf "  \033[1mHDMI Audio Encoder - Installer\033[0m\n\n"
-
-if [ "$EUID" -ne 0 ]; then
-    printf "  Run this installer with sudo:\n"
-    printf "  sudo ./install-rpi-hdmi-audio.sh\n\n"
+if (( EUID != 0 )) || [[ -z ${SUDO_USER:-} || ${SUDO_USER:-} == root ]]; then
+    printf 'Start dit script vanuit je gewone desktopaccount met sudo.\n' >&2
     exit 1
 fi
 
-TARGET_USER="${SUDO_USER:-}"
-if [ -z "$TARGET_USER" ] || [ "$TARGET_USER" = "root" ]; then
-    printf "  Run this installer from your normal GNOME account with sudo.\n\n"
-    exit 1
-fi
-
-TARGET_UID="$(id -u "$TARGET_USER")"
-TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
-SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
-PROJECT_STATE_DIR="/var/lib/hdmi-audio-encoder"
-DCAENC_COMMIT="68ed0d6d370268f04c22cadc9c8fc54a479958ab"
+TARGET_USER=$SUDO_USER
+TARGET_UID=$(id -u "$TARGET_USER")
+TARGET_GID=$(id -g "$TARGET_USER")
+TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
+[[ -d $TARGET_HOME && $TARGET_HOME == /* ]] || { echo 'Gebruikersmap niet gevonden.' >&2; exit 1; }
+SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
+APP_SOURCE="$SCRIPT_DIR/rpi-hdmi-audio.py"
+APP=/usr/local/bin/rpi-hdmi-audio
+PROJECT_STATE=/var/lib/hdmi-audio-encoder
+USER_META="$PROJECT_STATE/users/$TARGET_UID"
+DCA_COMMIT=68ed0d6d370268f04c22cadc9c8fc54a479958ab
+DCA_CONF=/usr/share/alsa/pcm/dca.conf
+ALSA_INCLUDE=/etc/alsa/conf.d/60-dca-encoder.conf
+BUILD_DIR=
+trap '[[ -z $BUILD_DIR ]] || rm -rf -- "$BUILD_DIR"' EXIT
 
 user_cmd() {
     runuser -u "$TARGET_USER" -- env \
-        HOME="$TARGET_HOME" \
-        XDG_RUNTIME_DIR="/run/user/$TARGET_UID" \
-        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$TARGET_UID/bus" \
-        "$@"
+        HOME="$TARGET_HOME" XDG_RUNTIME_DIR="/run/user/$TARGET_UID" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$TARGET_UID/bus" "$@"
 }
 
-printf "    Installing dependencies...\n\n"
-apt update -qq
-apt install -y -qq \
-    python3 python3-gi python3-gi-cairo \
-    gir1.2-gtk-4.0 gir1.2-adw-1 \
-    libasound2-plugins libasound2-dev \
-    pulseaudio-utils desktop-file-utils wireplumber \
-    git build-essential autoconf automake libtool pkg-config
+session_live() {
+    [[ -S /run/user/$TARGET_UID/bus ]] && user_cmd pactl info >/dev/null 2>&1
+}
 
-mkdir -p "$PROJECT_STATE_DIR"
-chmod 755 "$PROJECT_STATE_DIR"
-
-# ---------------------------------------------------------------------------
-# DTS / dcaenc
-#
-# Debian provides the ALSA A52 encoder used for Dolby Digital, but does not
-# ship the old dcaenc ALSA plugin that this application uses for realtime DTS.
-# Build the known upstream revision when the plugin is not already present.
-#
-# The ALSA library directory is discovered through pkg-config rather than
-# hard-coded, which keeps this part usable on arm64 and amd64.
-# ---------------------------------------------------------------------------
-
-ALSA_LIBDIR="$(pkg-config --variable=libdir alsa)"
-DCA_PLUGIN="$ALSA_LIBDIR/alsa-lib/libasound_module_pcm_dca.so"
-DCA_CONF="/usr/share/alsa/pcm/dca.conf"
-printf '%s\n' "$ALSA_LIBDIR" > "$PROJECT_STATE_DIR/dca-libdir"
-
-DCA_MANAGED=0
-if [ -f "$PROJECT_STATE_DIR/dcaenc-installed-by-hdmi-audio-encoder" ]; then
-    DCA_MANAGED=1
+[[ -f $APP_SOURCE ]] || { printf 'Ontbreekt: %s\n' "$APP_SOURCE" >&2; exit 1; }
+if [[ -e $ALSA_INCLUDE ]] && \
+   [[ $(cat -- "$ALSA_INCLUDE") != '<confdir:pcm/dca.conf>' ]]; then
+    printf 'Bestaand %s heeft andere inhoud; installatie afgebroken.\n' "$ALSA_INCLUDE" >&2
+    exit 1
 fi
 
-if [ -f "$DCA_PLUGIN" ] && [ -f "$DCA_CONF" ]; then
-    printf "    Existing DTS/dcaenc ALSA plugin found; reusing it.\n\n"
-else
-    printf "    Building DTS/dcaenc ALSA plugin...\n\n"
+printf 'HDMI Audio Encoder 16.4 herzien installeren...\n'
+apt-get update -qq
+apt-get install -y -qq \
+    python3 python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 \
+    libasound2-plugins libasound2-dev alsa-utils pulseaudio-utils \
+    desktop-file-utils pipewire pipewire-bin wireplumber \
+    git build-essential autoconf automake libtool pkg-config
 
-    BUILD_DIR="$(mktemp -d /tmp/hdmi-audio-encoder-dcaenc.XXXXXX)"
+python3 - "$APP_SOURCE" <<'PY'
+import ast
+import pathlib
+import sys
+tree = ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))
+version = next((n.value.value for n in tree.body if isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == 'APP_VERSION'
+                        for t in n.targets) and isinstance(n.value, ast.Constant)), None)
+revision = next((n.value.value for n in tree.body if isinstance(n, ast.Assign)
+                 and any(isinstance(t, ast.Name) and t.id == 'DSP_CONFIG_REVISION'
+                         for t in n.targets) and isinstance(n.value, ast.Constant)), None)
+if version != '16.4' or revision != '16.4-herzien':
+    raise SystemExit('rpi-hdmi-audio.py moet versie 16.4 herzien zijn.')
+PY
 
-    git clone -q https://github.com/darealshinji/dcaenc.git "$BUILD_DIR/dcaenc"
-    git -C "$BUILD_DIR/dcaenc" checkout -q "$DCAENC_COMMIT"
+install -d -m 700 "$PROJECT_STATE" "$PROJECT_STATE/users" "$USER_META"
 
-    cd "$BUILD_DIR/dcaenc"
-
-    # Modern libtool needs the auxiliary directory to be explicit for this
-    # 2014 autotools project.
-    if ! grep -q '^AC_CONFIG_AUX_DIR' configure.ac; then
-        sed -i \
-            '/AC_CONFIG_HEADERS(\[config.h\])/a AC_CONFIG_AUX_DIR([.])' \
-            configure.ac
+# Only a fresh installation can tell us the user's actual pre-app audio state.
+# Never replace this snapshot during an upgrade.
+if [[ ! -e $APP && ! -f $USER_META/audio-before-install ]] && session_live; then
+    default_sink=$(user_cmd pactl get-default-sink 2>/dev/null || true)
+    if [[ $default_sink != rpi_hdmi_audio_* ]]; then
+        card_profiles=$(user_cmd pactl list cards 2>/dev/null | awk '
+            /^[[:space:]]*Name: / { name=$2 }
+            /^[[:space:]]*Active Profile: / {
+                if (name == "alsa_card.platform-107c701400.hdmi") print "card0=" $3
+                if (name == "alsa_card.platform-107c706400.hdmi") print "card1=" $3
+            }')
+        {
+            printf '%s\n' "$card_profiles"
+            printf 'default=%s\n' "$default_sink"
+        } > "$USER_META/audio-before-install"
+        chmod 600 "$USER_META/audio-before-install"
+        if user_cmd systemctl --user is-active --quiet filter-chain.service; then
+            : > "$USER_META/filter-chain-was-active"
+        fi
     fi
+fi
 
+ALSA_LIBDIR=$(pkg-config --variable=libdir alsa)
+[[ $ALSA_LIBDIR == /* && $ALSA_LIBDIR != *..* ]] || { echo 'Ongeldig ALSA-libpad.' >&2; exit 1; }
+DCA_PLUGIN="$ALSA_LIBDIR/alsa-lib/libasound_module_pcm_dca.so"
+printf '%s\n' "$ALSA_LIBDIR" > "$PROJECT_STATE/dca-libdir"
+
+if [[ ! -f $DCA_PLUGIN || ! -f $DCA_CONF ]]; then
+    if [[ ! -f $PROJECT_STATE/dcaenc-installed-by-hdmi-audio-encoder ]]; then
+        # Building over a partially installed third-party dcaenc would erase
+        # its files and make safe removal impossible.
+        for existing in "$DCA_PLUGIN" "$DCA_CONF" /usr/bin/dcaenc \
+            /usr/include/dcaenc.h "$ALSA_LIBDIR/libdcaenc.so" \
+            "$ALSA_LIBDIR/libdcaenc.so.0" \
+            "$ALSA_LIBDIR/libdcaenc.so.0.0.0" \
+            "$ALSA_LIBDIR/libdcaenc.la" \
+            "$ALSA_LIBDIR/alsa-lib/libasound_module_pcm_dca.la" \
+            "$ALSA_LIBDIR/pkgconfig/dcaenc.pc"; do
+            if [[ -e $existing || -L $existing ]]; then
+                echo 'Onvolledige bestaande DTS-installatie: herstel die eerst handmatig.' >&2
+                exit 1
+            fi
+        done
+    fi
+    printf 'DTS-plugin bouwen...\n'
+    BUILD_DIR=$(mktemp -d /tmp/hdmi-audio-encoder-dcaenc.XXXXXXXX)
+    git clone -q https://github.com/darealshinji/dcaenc.git "$BUILD_DIR/dcaenc"
+    git -C "$BUILD_DIR/dcaenc" checkout -q "$DCA_COMMIT"
+    pushd "$BUILD_DIR/dcaenc" >/dev/null
+    if ! grep -q '^AC_CONFIG_AUX_DIR' configure.ac; then
+        sed -i '/AC_CONFIG_HEADERS(\[config.h\])/a AC_CONFIG_AUX_DIR([.])' configure.ac
+    fi
     autoreconf -f -i -v
     ./configure --prefix=/usr --libdir="$ALSA_LIBDIR"
     make -j"$(nproc)"
+    # Track ownership before the first installed file, also on partial errors.
+    : > "$PROJECT_STATE/dcaenc-installed-by-hdmi-audio-encoder"
     make install
+    popd >/dev/null
     ldconfig
-
-    touch "$PROJECT_STATE_DIR/dcaenc-installed-by-hdmi-audio-encoder"
-    DCA_MANAGED=1
-
-    cd "$SCRIPT_DIR"
 fi
+[[ -f $DCA_PLUGIN && -f $DCA_CONF ]] || { echo 'DTS-installatie onvolledig.' >&2; exit 1; }
 
-if [ ! -f "$DCA_PLUGIN" ] || [ ! -f "$DCA_CONF" ]; then
-    printf "  DTS installation did not create the expected ALSA files.\n\n"
+# An existing, independently installed dcaenc config must return byte-for-byte.
+if [[ ! -f $PROJECT_STATE/dcaenc-installed-by-hdmi-audio-encoder && \
+      ! -e $PROJECT_STATE/dca.conf.before-hdmi-audio-encoder ]]; then
+    cp -a -- "$DCA_CONF" "$PROJECT_STATE/dca.conf.before-hdmi-audio-encoder"
+fi
+sed -i 's/@args \[ CARD DEV AES0 AES1 AES2 AES3 \]/@args [ CARD DEV AES0 AES1 AES2 AES3 IEC61937 ]/' "$DCA_CONF"
+(( $(grep -cF '@args [ CARD DEV AES0 AES1 AES2 AES3 IEC61937 ]' "$DCA_CONF" || true) >= 2 )) || {
+    echo 'DTS-configuratie heeft niet de verwachte IEC61937-argumenten.' >&2
     exit 1
+}
+
+# This project-specific path also covers an earlier manually applied system fix.
+if [[ ! -e $ALSA_INCLUDE ]]; then
+    printf '%s\n' '<confdir:pcm/dca.conf>' > "$ALSA_INCLUDE"
+    chmod 644 "$ALSA_INCLUDE"
 fi
 
-# If dcaenc existed before this installer, preserve its original ALSA config
-# so the remover can undo only our IEC61937 compatibility change.
-if [ "$DCA_MANAGED" -eq 0 ] && \
-   [ ! -f "$PROJECT_STATE_DIR/dca.conf.before-hdmi-audio-encoder" ]; then
-    cp -a "$DCA_CONF" "$PROJECT_STATE_DIR/dca.conf.before-hdmi-audio-encoder"
+# Old versions appended an ALSA include to only the installing user's file.
+# Remove precisely that line when the old installer recorded ownership.
+if [[ -f $PROJECT_STATE/asoundrc-include-added ]]; then
+    python3 - "$TARGET_HOME/.asoundrc" <<'PY'
+import os, pathlib, sys, tempfile
+p = pathlib.Path(sys.argv[1])
+if p.is_file():
+    old = p.read_bytes()
+    new = old.replace(b'\n<confdir:pcm/dca.conf>\n', b'', 1)
+    if new == old and old == b'<confdir:pcm/dca.conf>\n':
+        new = b''
+    if new != old:
+        if not new.strip():
+            p.unlink()
+        else:
+            fd, name = tempfile.mkstemp(dir=p.parent)
+            try:
+                os.fchmod(fd, p.stat().st_mode & 0o777)
+                os.fchown(fd, p.stat().st_uid, p.stat().st_gid)
+                with os.fdopen(fd, 'wb') as stream:
+                    stream.write(new)
+                os.replace(name, p)
+            finally:
+                if os.path.exists(name): os.unlink(name)
+PY
+    rm -f "$PROJECT_STATE/asoundrc-include-added"
 fi
 
-# Upstream dca.conf defines IEC61937 but omits it from the dcahdmi argument
-# lists. Add it so dcahdmi:...,IEC61937=1 can be selected by the application.
-sed -i \
-    's/@args \[ CARD DEV AES0 AES1 AES2 AES3 \]/@args [ CARD DEV AES0 AES1 AES2 AES3 IEC61937 ]/' \
-    "$DCA_CONF"
-
-if [ "$(grep -c '@args \[ CARD DEV AES0 AES1 AES2 AES3 IEC61937 \]' "$DCA_CONF" || true)" -lt 2 ]; then
-    printf "  Could not enable IEC61937 in %s.\n\n" "$DCA_CONF"
-    exit 1
-fi
-
-# dca.conf is not loaded automatically by ALSA. Add one include to this user's
-# .asoundrc and remember whether this installer added it, so removal is safe.
-ASOUNDRC="$TARGET_HOME/.asoundrc"
-if ! grep -qxF '<confdir:pcm/dca.conf>' "$ASOUNDRC" 2>/dev/null; then
-    printf '\n<confdir:pcm/dca.conf>\n' >> "$ASOUNDRC"
-    chown "$TARGET_USER:$TARGET_USER" "$ASOUNDRC"
-    touch "$PROJECT_STATE_DIR/asoundrc-include-added"
-fi
-
-printf "    Removing old experimental ACP / WirePlumber configuration...\n\n"
-
-# Older development versions used custom ALSA Card Profiles and a
-# WirePlumber rule. The current application no longer needs them because it
-# creates its Stereo / AC-3 / DTS sinks directly with module-alsa-sink.
-rm -f "$TARGET_HOME/.config/alsa-card-profile/profile-sets/rpi-hdmi0.conf"
-rm -f "$TARGET_HOME/.config/alsa-card-profile/profile-sets/rpi-hdmi1.conf"
-rm -f "$TARGET_HOME/.config/wireplumber/wireplumber.conf.d/51-rpi-hdmi-ac3.conf"
-rm -f "$TARGET_HOME/.config/pipewire/pipewire.conf.d/90-rpi-hdmi-audio-names.conf"
-
-# Remove obsolete per-user autostart entries from development builds. The
-# current version uses exactly one system-wide hidden restore entry below.
-rm -f "$TARGET_HOME/.config/autostart/rpi-hdmi-audio.desktop"
-rm -f "$TARGET_HOME/.config/autostart/rpi-hdmi-audio-restore.desktop"
-
-rmdir --ignore-fail-on-non-empty \
-    "$TARGET_HOME/.config/alsa-card-profile/profile-sets" \
-    "$TARGET_HOME/.config/alsa-card-profile" \
-    "$TARGET_HOME/.config/wireplumber/wireplumber.conf.d" \
-    "$TARGET_HOME/.config/pipewire/pipewire.conf.d" \
-    2>/dev/null || true
-
-printf "    Preparing saved audio selection...\n\n"
+# The app owns these exact old development filenames; never delete folders.
+rm -f "$TARGET_HOME/.config/alsa-card-profile/profile-sets/rpi-hdmi0.conf" \
+      "$TARGET_HOME/.config/alsa-card-profile/profile-sets/rpi-hdmi1.conf" \
+      "$TARGET_HOME/.config/wireplumber/wireplumber.conf.d/51-rpi-hdmi-ac3.conf" \
+      "$TARGET_HOME/.config/pipewire/pipewire.conf.d/90-rpi-hdmi-audio-names.conf" \
+      "$TARGET_HOME/.config/autostart/rpi-hdmi-audio.desktop" \
+      "$TARGET_HOME/.config/autostart/rpi-hdmi-audio-restore.desktop"
+rm -f /usr/local/bin/add-channel-volume.py /usr/local/bin/add-channel-volume-v2.py
 
 STATE_DIR="$TARGET_HOME/.local/state/rpi-hdmi-audio"
-STATE_FILE="$STATE_DIR/last-choice"
-mkdir -p "$STATE_DIR"
-chown "$TARGET_USER:$TARGET_USER" "$TARGET_HOME/.local" "$TARGET_HOME/.local/state" "$STATE_DIR" 2>/dev/null || true
-
-# When upgrading, preserve the direct sink that is active right now if it can
-# be detected. If there is no previous saved state and no direct sink is
-# active, start with HDMI 0 Stereo 2.0.
-if [ -S "/run/user/$TARGET_UID/bus" ]; then
-    ACTIVE_SINKS="$(user_cmd pactl list sinks short 2>/dev/null || true)"
-    case "$ACTIVE_SINKS" in
-        *rpi_hdmi_audio_hdmi0_dts*)    printf '%s\n' hdmi0-dts    > "$STATE_FILE" ;;
-        *rpi_hdmi_audio_hdmi0_ac3*)    printf '%s\n' hdmi0-ac3    > "$STATE_FILE" ;;
-        *rpi_hdmi_audio_hdmi0_stereo*) printf '%s\n' hdmi0-stereo > "$STATE_FILE" ;;
-        *rpi_hdmi_audio_hdmi1_dts*)    printf '%s\n' hdmi1-dts    > "$STATE_FILE" ;;
-        *rpi_hdmi_audio_hdmi1_ac3*)    printf '%s\n' hdmi1-ac3    > "$STATE_FILE" ;;
-        *rpi_hdmi_audio_hdmi1_stereo*) printf '%s\n' hdmi1-stereo > "$STATE_FILE" ;;
-        *)
-            if [ ! -s "$STATE_FILE" ]; then
-                printf '%s\n' hdmi0-stereo > "$STATE_FILE"
-            fi
-            ;;
-    esac
-else
-    if [ ! -s "$STATE_FILE" ]; then
-        printf '%s\n' hdmi0-stereo > "$STATE_FILE"
+for dir in "$TARGET_HOME/.local" "$TARGET_HOME/.local/state" "$STATE_DIR"; do
+    if [[ ! -d $dir ]]; then
+        install -d -o "$TARGET_UID" -g "$TARGET_GID" -m 700 "$dir"
     fi
+done
+STATE_FILE="$STATE_DIR/last-choice"
+
+# Keep volume and Frequency lines when updating an existing choice.
+active_choice=
+if session_live; then
+    case $(user_cmd pactl get-default-sink 2>/dev/null || true) in
+        rpi_hdmi_audio_hdmi0_stereo) active_choice=hdmi0-stereo ;;
+        rpi_hdmi_audio_hdmi0_pcm51)  active_choice=hdmi0-pcm51 ;;
+        rpi_hdmi_audio_hdmi0_ac3)    active_choice=hdmi0-ac3 ;;
+        rpi_hdmi_audio_hdmi0_dts)    active_choice=hdmi0-dts ;;
+        rpi_hdmi_audio_hdmi1_stereo) active_choice=hdmi1-stereo ;;
+        rpi_hdmi_audio_hdmi1_pcm51)  active_choice=hdmi1-pcm51 ;;
+        rpi_hdmi_audio_hdmi1_ac3)    active_choice=hdmi1-ac3 ;;
+        rpi_hdmi_audio_hdmi1_dts)    active_choice=hdmi1-dts ;;
+    esac
 fi
-chown "$TARGET_USER:$TARGET_USER" "$STATE_FILE"
+if [[ -n $active_choice || ! -s $STATE_FILE ]]; then
+    { printf '%s\n' "${active_choice:-hdmi0-stereo}"
+      [[ ! -f $STATE_FILE ]] || tail -n +2 "$STATE_FILE"
+    } > "$STATE_FILE.install-tmp"
+    mv -f "$STATE_FILE.install-tmp" "$STATE_FILE"
+fi
+chown "$TARGET_UID:$TARGET_GID" "$STATE_FILE"
 chmod 600 "$STATE_FILE"
 
-printf "    Installing application...\n\n"
-install -m 755 "$SCRIPT_DIR/rpi-hdmi-audio.py" /usr/local/bin/rpi-hdmi-audio
+# Terminate only this app's process and its specifically named silent keepalive.
+python3 - "$TARGET_UID" <<'PY'
+import os, pathlib, signal, sys, time
+uid = int(sys.argv[1]); victims = []
+for proc in pathlib.Path('/proc').iterdir():
+    if not proc.name.isdigit() or int(proc.name) == os.getpid(): continue
+    try:
+        if proc.stat().st_uid != uid: continue
+        a = [x.decode(errors='replace') for x in (proc/'cmdline').read_bytes().split(b'\0') if x]
+        app = '/usr/local/bin/rpi-hdmi-audio' in a[:2]
+        sound = (a and pathlib.Path(a[0]).name == 'paplay' and '--raw' in a and
+                 any(x.startswith('--device=rpi_hdmi_audio_hdmi') for x in a))
+        if app or sound: victims.append(int(proc.name))
+    except (OSError, ValueError): pass
+for pid in victims:
+    try: os.kill(pid, signal.SIGTERM)
+    except (OSError, ProcessLookupError): pass
+end = time.monotonic() + 1.0
+alive = victims
+while time.monotonic() < end:
+    alive = []
+    for pid in victims:
+        try:
+            p = pathlib.Path('/proc') / str(pid)
+            a = (p/'cmdline').read_bytes().split(b'\0')
+            if p.stat().st_uid == uid and (b'/usr/local/bin/rpi-hdmi-audio' in a[:2] or
+                any(x.startswith(b'--device=rpi_hdmi_audio_hdmi') for x in a)):
+                alive.append(pid)
+        except (OSError, ValueError): pass
+    if not alive: break
+    time.sleep(.05)
+for pid in alive:
+    try: os.kill(pid, signal.SIGKILL)
+    except (OSError, ProcessLookupError): pass
+PY
 
-printf "    Installing GNOME launcher...\n\n"
+install -m 755 "$APP_SOURCE" "$APP"
+user_cmd "$APP" --write-filter-config
+
 cat > /usr/share/applications/rpi-hdmi-audio.desktop <<'DESKTOP'
 [Desktop Entry]
 Version=1.0
 Type=Application
 Name=HDMI Audio Encoder
-Comment=Select HDMI stereo, Dolby Digital 5.1, or DTS 5.1 output
+Comment=Choose HDMI stereo, PCM 5.1, Dolby Digital or DTS with Frequency Balance
 Exec=/usr/local/bin/rpi-hdmi-audio
 Icon=audio-card
 Terminal=false
 Categories=Settings;AudioVideo;Audio;
-Keywords=audio;hdmi;dolby;ac3;dts;surround;5.1;raspberry;
+Keywords=audio;hdmi;pcm;dolby;ac3;dts;surround;frequency;raspberry;
 DESKTOP
 chmod 644 /usr/share/applications/rpi-hdmi-audio.desktop
 
-# System-wide GNOME autostart entry. It does NOT open the application window.
-# It rebuilds the last successfully selected HDMI Audio Encoder sink after
-# login. If that fails, the application restores normal HDMI 0 stereo.
 cat > /etc/xdg/autostart/rpi-hdmi-audio-restore.desktop <<'DESKTOP'
 [Desktop Entry]
 Type=Application
 Name=HDMI Audio Encoder Restore
-Comment=Restore the last selected HDMI audio mode after login
-Exec=/usr/local/bin/rpi-hdmi-audio --restore
+Comment=Restore the last HDMI audio mode after login
+Exec=/usr/local/bin/rpi-hdmi-audio --restore-monitor
 Icon=audio-card
 Terminal=false
 NoDisplay=true
 X-GNOME-Autostart-enabled=true
 DESKTOP
 chmod 644 /etc/xdg/autostart/rpi-hdmi-audio-restore.desktop
-
 update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
 
-printf "    Restarting the user audio stack with normal configuration...\n\n"
-if [ -S "/run/user/$TARGET_UID/bus" ]; then
-    user_cmd systemctl --user restart pipewire pipewire-pulse wireplumber || true
-
-    # Wait briefly for pipewire-pulse, then restore HDMI 0 stereo as a safe
-    # normal GNOME fallback. The app takes direct control when the user selects
-    # one of its six modes.
-    for _ in $(seq 1 30); do
-        if user_cmd pactl info >/dev/null 2>&1; then
-            break
-        fi
+if [[ -S /run/user/$TARGET_UID/bus ]]; then
+    user_cmd systemctl --user restart pipewire pipewire-pulse wireplumber
+    for _ in {1..40}; do
+        user_cmd pactl info >/dev/null 2>&1 && break
         sleep 0.2
     done
-
-    user_cmd pactl set-card-profile \
-        alsa_card.platform-107c701400.hdmi output:hdmi-stereo \
-        >/dev/null 2>&1 || true
+    if session_live; then
+        # This one process performs both restore and volume monitoring.
+        runuser -u "$TARGET_USER" -- env \
+            HOME="$TARGET_HOME" XDG_RUNTIME_DIR="/run/user/$TARGET_UID" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$TARGET_UID/bus" \
+            nohup "$APP" --restore-monitor </dev/null >/dev/null 2>&1 &
+    else
+        echo 'Audio nog niet bereikbaar: meld je opnieuw aan om de opgeslagen uitvoer te herstellen.' >&2
+    fi
 fi
 
-printf "\n"
-printf "  ╔════════════ \033[1mHDMI Audio Encoder - Complete\033[0m ═══════════╗\n"
-printf "  ║  Installation complete.                            ║\n"
-printf "  ║  Stereo, Dolby Digital 5.1 and DTS 5.1 available. ║\n"
-printf "  ║  Last selected audio mode is restored after login.║\n"
-printf "  ╚═════════════════════════════════════════════════════╝\n\n"
+printf 'Gereed: versie 16.4 herzien. Open HDMI Audio Encoder via het applicatiemenu.\n'
