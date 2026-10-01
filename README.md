@@ -1,6 +1,6 @@
 # RPi HDMI Audio
 
-HDMI audio output manager for Raspberry Pi 5 / Raspberry Pi 500+ running Debian 13 GNOME.
+HDMI audio output manager for Raspberry Pi 4 / Raspberry Pi 5 / Raspberry Pi 500+ running Debian 13 GNOME.
 
 RPi HDMI Audio adds selectable **Stereo 2.0, PCM 5.1, Dolby Digital 5.1 and DTS 5.1** output modes for both Raspberry Pi HDMI ports.
 
