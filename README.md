@@ -8,7 +8,7 @@ It also provides independent speaker levels, per-speaker frequency balance and G
 
 Download v16.4: 
 
-[<img height="16" alt="hdmi-audio-encoder" src="https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.4/hdmi-audio-encoder_1024x1024.png" /> hdmi-audio-encoder_16.4-1_arm64.deb](https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.4/hdmi-audio-encoder_16.4-1_arm64.deb)
+[<img height="16" alt="hdmi-audio-encoder" src="https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.4/hdmi-audio-encoder_1024x1024.png" />](https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.4/hdmi-audio-encoder_16.4-1_arm64.deb) [hdmi-audio-encoder_16.4-1_arm64.deb](https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.4/hdmi-audio-encoder_16.4-1_arm64.deb)
 
 <img height="400" alt="RPi HDMI Audio" src="https://github.com/user-attachments/assets/120d9bf2-e0cd-4798-a857-e54f563dd929" /> <img height="200" alt="GNOME Sound outputs" src="https://github.com/user-attachments/assets/59ff0c9f-68a2-4168-b561-0844bf366100" />
 
