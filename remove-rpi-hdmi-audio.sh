@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# HDMI Audio Encoder 16.4 - remove this app and restore native desktop audio.
-# Run from a logged-in desktop account: sudo ./remove-rpi-hdmi-audio.sh
+# HDMI Audio Encoder 16.5 remover
+# Remove this application and restore native desktop audio.
+# Run from a logged-in GNOME desktop account:
+#   sudo ./remove-rpi-hdmi-audio.sh
 set -euo pipefail
 
 if (( EUID != 0 )) || [[ -z ${SUDO_USER:-} || ${SUDO_USER:-} == root ]]; then
-    printf 'Start dit script vanuit je gewone desktopaccount met sudo.\n' >&2
+    printf 'Run this remover from your normal desktop account with sudo.\n' >&2
     exit 1
 fi
 
@@ -18,6 +20,8 @@ CARD0=alsa_card.platform-107c701400.hdmi
 CARD1=alsa_card.platform-107c706400.hdmi
 declare -a ISSUES=()
 
+# Run a command inside a specific user's desktop DBus/PipeWire session.
+# This lets pactl and systemctl --user control the correct logged-in desktop.
 user_cmd() {
     local user=$1 uid=$2 home=$3
     shift 3
@@ -26,13 +30,16 @@ user_cmd() {
         DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" "$@"
 }
 
+# Return success when the user's DBus socket exists and the PipeWire
+# PulseAudio-compatible interface responds.
 session_live() {
     local user=$1 uid=$2 home=$3
     [[ -S /run/user/$uid/bus ]] && user_cmd "$user" "$uid" "$home" pactl info >/dev/null 2>&1
 }
 
-# Stop only this program's GUI, monitor and its raw silent Dolby/DTS stream.
-# This works even when the installed binary is damaged or already missing.
+# Stop only processes that belong to HDMI Audio Encoder, including its
+# background monitor and silent Dolby/DTS keepalive stream. The fallback
+# process scan also works if the installed application binary is damaged.
 stop_app_processes() {
     python3 - "$1" <<'PY'
 import os, pathlib, signal, sys, time
@@ -63,6 +70,8 @@ for pid in victims:
 PY
 }
 
+# Unload only module-alsa-sink/module-null-sink instances created by this
+# project. Native HDMI devices and unrelated PipeWire modules are left alone.
 unload_our_modules() {
     local user=$1 uid=$2 home=$3 index module arguments
     while IFS=$'\t' read -r index module arguments; do
@@ -105,6 +114,7 @@ else:
 PY
 }
 
+# Read the kernel DRM connector state for HDMI 0 (1) or HDMI 1 (2).
 connected_port() {
     local n=$1 status
     for status in /sys/class/drm/card*-HDMI-A-"$n"/status; do
@@ -113,6 +123,8 @@ connected_port() {
     return 1
 }
 
+# Restore the HDMI card profiles that were saved before the first install.
+# If no baseline exists, expose a native HDMI stereo profile as a safe fallback.
 restore_profiles() {
     local user=$1 uid=$2 home=$3 baseline="$PROJECT_STATE/users/$2/audio-before-install"
     local old_card0= old_card1= key value
@@ -143,6 +155,8 @@ restore_profiles() {
     fi
 }
 
+# Restore the original default sink when it still exists. Otherwise choose
+# a visible native HDMI sink, preferring the physically connected HDMI port.
 restore_default() {
     local user=$1 uid=$2 home=$3 baseline="$PROJECT_STATE/users/$2/audio-before-install"
     local preferred= candidate= key value
@@ -174,11 +188,13 @@ restore_default() {
     return 1
 }
 
+# Restart PipeWire/WirePlumber, restore native HDMI profiles/default output,
+# and return filter-chain.service to its pre-install state.
 restore_session() {
     local user=$1 uid=$2 home=$3
     if ! user_cmd "$user" "$uid" "$home" systemctl --user restart \
             pipewire pipewire-pulse wireplumber; then
-        ISSUES+=("Kan de audiodiensten van $user niet herstarten.")
+        ISSUES+=("Could not restart the audio services for $user.")
         return
     fi
     local ready=0
@@ -189,14 +205,14 @@ restore_session() {
         sleep 0.2
     done
     if (( ! ready )); then
-        ISSUES+=("Audio van $user is niet bereikbaar; herstel na opnieuw inloggen.")
+        ISSUES+=("Audio for $user is not reachable; it should recover after the next login.")
         return
     fi
     restore_profiles "$user" "$uid" "$home"
     # Give WirePlumber time to expose the restored native HDMI sink.
     sleep 0.5
     if ! restore_default "$user" "$uid" "$home"; then
-        ISSUES+=("Geen aangesloten native HDMI-uitvoer zichtbaar bij $user.")
+        ISSUES+=("No connected native HDMI output is visible for $user.")
     fi
 
     local meta="$PROJECT_STATE/users/$uid"
@@ -218,13 +234,13 @@ restore_session() {
 # still belongs to this app. An unexpected include needs manual inspection.
 if [[ -e $ALSA_INCLUDE ]] && \
    [[ $(cat -- "$ALSA_INCLUDE") != '<confdir:pcm/dca.conf>' ]]; then
-    printf 'Bestaand %s is aangepast. Niets verwijderd: controleer dit bestand eerst.\n' \
+    printf 'Existing %s was modified. Nothing was removed; inspect this file first.\n' \
         "$ALSA_INCLUDE" >&2
     exit 1
 fi
 
-# Apply per-user cleanup to every local desktop account; this system-wide app
-# can have user state and Frequency configuration in more than one account.
+# Clean per-user files for every local desktop account. The app is installed
+# system-wide, but each user may have their own state and Frequency settings.
 declare -a ONLINE=()
 declare -a USERS=()
 while IFS=: read -r user _ uid gid _ home _; do
@@ -237,17 +253,17 @@ while IFS=: read -r user _ uid gid _ home _; do
 done < <(getent passwd)
 
 if (( ${#USERS[@]} == 0 )); then
-    echo 'Geen gebruikersmap gevonden; verwijdering afgebroken.' >&2
+    echo 'No suitable local desktop user was found; removal stopped.' >&2
     exit 1
 fi
 
 target_home=$(getent passwd "$TARGET_USER" | cut -d: -f6)
 if [[ ! -S /run/user/$TARGET_UID/bus ]]; then
-    echo 'Geen actieve desktopsessie. Meld je aan in de desktop en voer de remover opnieuw uit.' >&2
+    echo 'No active desktop session. Log in to GNOME and run the remover again.' >&2
     exit 1
 fi
 
-printf 'HDMI Audio Encoder verwijderen en gewone audio herstellen...\n'
+printf 'Removing HDMI Audio Encoder and restoring native desktop audio...\n'
 rm -f /etc/xdg/autostart/rpi-hdmi-audio-restore.desktop
 
 for entry in "${USERS[@]}"; do
@@ -302,7 +318,7 @@ if [[ -f $PROJECT_STATE/dcaenc-installed-by-hdmi-audio-encoder ]]; then
     fi
     if [[ $DCA_LIBDIR != /usr/lib/* && $DCA_LIBDIR != /lib/* ]] || \
        [[ $DCA_LIBDIR == *..* ]]; then
-        ISSUES+=('DTS-libpad ongeldig; DTS-bestanden bewaard voor handmatige controle.')
+        ISSUES+=('Invalid DTS library path; DTS files were kept for manual inspection.')
     else
         rm -f -- /usr/bin/dcaenc /usr/include/dcaenc.h "$DCA_CONF" \
             "$DCA_LIBDIR/libdcaenc.so" "$DCA_LIBDIR/libdcaenc.so.0" \
@@ -314,7 +330,8 @@ if [[ -f $PROJECT_STATE/dcaenc-installed-by-hdmi-audio-encoder ]]; then
     fi
 fi
 
-# Revert a dca.conf changed on top of a pre-existing DTS installation.
+# If DTS/dcaenc already existed before this app, restore the exact dca.conf
+# that the installer saved before adding its IEC61937 compatibility change.
 if [[ -e $PROJECT_STATE/dca.conf.before-hdmi-audio-encoder ]]; then
     install -d /usr/share/alsa/pcm
     cp -a -- "$PROJECT_STATE/dca.conf.before-hdmi-audio-encoder" "$DCA_CONF"
@@ -327,10 +344,10 @@ done
 
 if (( ${#ISSUES[@]} == 0 )); then
     rm -rf -- "$PROJECT_STATE"
-    printf 'Verwijderd. De standaard HDMI/desktop-audio is hersteld voor actieve gebruikers.\n'
+    printf 'Removed. Native HDMI/desktop audio was restored for active users.\n'
 else
-    printf 'App verwijderd; controleer het volgende:\n' >&2
+    printf 'The app was removed, but check the following:\n' >&2
     printf ' - %s\n' "${ISSUES[@]}" >&2
-    printf 'Herstelgegevens blijven bewaard in %s.\n' "$PROJECT_STATE" >&2
+    printf 'Recovery metadata was kept in %s.\n' "$PROJECT_STATE" >&2
     exit 1
 fi
