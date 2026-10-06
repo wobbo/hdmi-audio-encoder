@@ -28,9 +28,9 @@ from gi.repository import Adw, Gio, GLib, Gtk
 
 APP_ID = "org.wobbo.RPiHDMIAudio"
 # Update both values for every released change to this script.
-APP_VERSION = "16.5"
-APP_VERSION_DATE = "2026-10-06 13:26"
-DSP_CONFIG_REVISION = "16.5-pcm-default"
+APP_VERSION = "16.6"
+APP_VERSION_DATE = "2026-10-06 14:31"
+DSP_CONFIG_REVISION = "16.6-pcm-default"
 STATE_DIR = Path.home() / ".local" / "state" / "rpi-hdmi-audio"
 STATE_FILE = STATE_DIR / "last-choice"
 OPERATION_LOCK_FILE = STATE_DIR / "audio-operation.lock"
@@ -2577,6 +2577,11 @@ class AudioWindow(Adw.ApplicationWindow):
         self.control_update_requested = False
         self.last_local_volume_change_at = 0.0
         self.syncing_volume_ui = False
+        # The audio stack can still be settling when the window opens directly
+        # after a fresh install. Retry detection briefly instead of showing an
+        # unselected list immediately. This affects only the GUI; it does not
+        # delay installation or change the selected audio mode.
+        self.initial_refresh_retries = 0
         self.hdmi_connected: dict[str, bool] = {}
         self.hdmi_uevent_socket: socket.socket | None = None
         self.hdmi_uevent_source_id = 0
@@ -2675,21 +2680,8 @@ class AudioWindow(Adw.ApplicationWindow):
         info_text.set_hexpand(True)
         info_footer.append(info_text)
 
-        info_title = Gtk.Label()
-        info_title.set_markup("<b>PCM (Default) / Stereo / Dolby Digital / DTS</b>")
-        info_title.set_xalign(0.0)
-        info_title.set_wrap(True)
-        info_text.append(info_title)
-
         info_body = Gtk.Label()
-        info_body.set_markup(
-            "PCM (Default) follows the normal PipeWire / HDMI capability. "
-            "Stereo 2.0 forces two-channel PCM. "
-            "Dolby Digital / DTS require a decoder. "
-            "Unsupported modes may produce no audio or digital noise. "
-            f"Version&#160;{APP_VERSION}&#160;"
-            f"<i>{APP_VERSION_DATE.replace(' ', '&#160;')}</i>"
-        )
+        info_body.set_markup(f"Dolby Digital and DTS require a compatible receiver or decoder. Unsupported modes may produce loud digital noise. Version&#160;{APP_VERSION}&#160;<i>{APP_VERSION_DATE.replace(' ', '&#160;')}</i>")
         info_body.set_xalign(0.0)
         info_body.set_wrap(True)
         info_body.add_css_class("dim-label")
@@ -3127,10 +3119,18 @@ class AudioWindow(Adw.ApplicationWindow):
             current = get_current_choice()
 
             if current is None:
+                if self.initial_refresh_retries < 6:
+                    self.initial_refresh_retries += 1
+                    self.status.set_subtitle("Detecting active audio output…")
+                    GLib.timeout_add(250, self.refresh)
+                    return False
+
                 self.status.set_subtitle(
                     "No active RPi HDMI Audio output found."
                 )
                 return False
+
+            self.initial_refresh_retries = 0
 
             if frequency_filter_is_active(current) or not dsp_requested(current):
                 self.status.set_subtitle(f"Active: {current.title}")
