@@ -14,7 +14,7 @@ import sys
 import tempfile
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -220,15 +220,15 @@ CHOICES = (
     ),
     Choice(
         key="hdmi0-pcm51",
-        title="HDMI 0 · PCM 5.1",
-        subtitle="Uncompressed PCM 5.1 for HDMI → HDMI",
+        title="HDMI 0 · PCM (Default)",
+        subtitle="Native HDMI PCM via PipeWire / WirePlumber",
         card=CARD0,
         other_card=CARD1,
         mode=MODE_PCM51,
         profile=PROFILE_PCM51,
         alsa_device="hdmi:CARD=vc4hdmi0,DEV=0",
         sink_name="rpi_hdmi_audio_hdmi0_pcm51",
-        description="HDMI 0 - PCM 5.1",
+        description="HDMI 0 - PCM (Default)",
         channels=6,
         channel_map=(
             "front-left,front-right,rear-left,rear-right,front-center,lfe"
@@ -286,15 +286,15 @@ CHOICES = (
     ),
     Choice(
         key="hdmi1-pcm51",
-        title="HDMI 1 · PCM 5.1",
-        subtitle="Uncompressed PCM 5.1 for HDMI → HDMI",
+        title="HDMI 1 · PCM (Default)",
+        subtitle="Native HDMI PCM via PipeWire / WirePlumber",
         card=CARD1,
         other_card=CARD0,
         mode=MODE_PCM51,
         profile=PROFILE_PCM51,
         alsa_device="hdmi:CARD=vc4hdmi1,DEV=0",
         sink_name="rpi_hdmi_audio_hdmi1_pcm51",
-        description="HDMI 1 - PCM 5.1",
+        description="HDMI 1 - PCM (Default)",
         channels=6,
         channel_map=(
             "front-left,front-right,rear-left,rear-right,front-center,lfe"
@@ -495,7 +495,7 @@ def save_audio_state(
             choice
             or saved_choice
             or fallback_choice
-            or CHOICE_BY_KEY["hdmi0-stereo"]
+            or CHOICE_BY_KEY["hdmi0-pcm51"]
         )
 
         if master_volume is not None:
@@ -1206,8 +1206,9 @@ def hdmi_pcm51_capability(
 ) -> bool | None:
     """Return True/False when ELD clearly says whether 6ch LPCM is supported.
 
-    None means the kernel ELD information is temporarily unavailable. This is
-    only displayed in the GUI; the user may select PCM 5.1 in either case.
+    PCM (Default) uses this to prefer native HDMI Surround 5.1 when the
+    connected device advertises six-channel LPCM. Stereo is the safe fallback.
+    None means the kernel ELD information is temporarily unavailable.
     """
     wanted_id = _alsa_card_id_for_choice(choice)
 
@@ -1262,6 +1263,119 @@ def hdmi_pcm51_capability(
     return None
 
 
+
+def native_pcm_layout_choice(
+    choice: Choice,
+    profile: str | None = None,
+) -> Choice:
+    """Return the channel layout used by the normal PipeWire HDMI profile."""
+    selected_profile = profile
+    if selected_profile not in (PROFILE_STEREO, PROFILE_PCM51):
+        selected_profile = (
+            PROFILE_PCM51
+            if hdmi_pcm51_capability(choice) is True
+            else PROFILE_STEREO
+        )
+
+    if selected_profile == PROFILE_PCM51:
+        return replace(
+            choice,
+            profile=PROFILE_PCM51,
+            channels=6,
+            channel_map=(
+                "front-left,front-right,rear-left,rear-right,"
+                "front-center,lfe"
+            ),
+        )
+
+    return replace(
+        choice,
+        profile=PROFILE_STEREO,
+        channels=2,
+        channel_map="front-left,front-right",
+    )
+
+
+def normal_hdmi_sink_name(choice: Choice) -> str | None:
+    """Return the native PipeWire sink belonging to this Raspberry Pi HDMI port."""
+    needle = "107c701400" if choice.card == CARD0 else "107c706400"
+
+    for sink_name in get_sinks():
+        if needle in sink_name:
+            return sink_name
+
+    return None
+
+
+def wait_for_normal_hdmi_sink(
+    choice: Choice,
+    timeout_seconds: float = SINK_TIMEOUT_SECONDS,
+) -> str | None:
+    deadline = time.monotonic() + timeout_seconds
+
+    while time.monotonic() < deadline:
+        sink_name = normal_hdmi_sink_name(choice)
+        if sink_name is not None:
+            return sink_name
+        time.sleep(0.05)
+
+    return None
+
+
+def activate_native_pcm(choice: Choice) -> Choice:
+    """Return HDMI to the normal PipeWire/WirePlumber PCM path.
+
+    Prefer the native 5.1 profile when ELD explicitly advertises six-channel
+    LPCM. If that profile is unavailable or fails to open, fall back to the
+    normal native stereo profile. No custom module-alsa-sink is created.
+    """
+    preferred = (
+        PROFILE_PCM51
+        if hdmi_pcm51_capability(choice) is True
+        else PROFILE_STEREO
+    )
+    profiles = (
+        (PROFILE_PCM51, PROFILE_STEREO)
+        if preferred == PROFILE_PCM51
+        else (PROFILE_STEREO,)
+    )
+
+    run(
+        ["pactl", "set-card-profile", choice.other_card, "off"],
+        check=False,
+    )
+
+    last_error = "No native HDMI PCM sink appeared."
+
+    for profile in profiles:
+        result = run(
+            ["pactl", "set-card-profile", choice.card, profile],
+            check=False,
+        )
+
+        if result.returncode != 0:
+            last_error = (
+                result.stderr.strip()
+                or result.stdout.strip()
+                or f"Could not activate {profile}."
+            )
+            continue
+
+        sink_name = wait_for_normal_hdmi_sink(choice)
+        if sink_name is None:
+            last_error = f"The native {profile} sink did not appear in time."
+            continue
+
+        return replace(
+            native_pcm_layout_choice(choice, profile),
+            sink_name=sink_name,
+        )
+
+    raise RuntimeError(
+        "Could not activate PCM (Default): " + last_error
+    )
+
+
 def get_current_choice() -> Choice | None:
     sinks = get_sinks()
 
@@ -1275,7 +1389,28 @@ def get_current_choice() -> Choice | None:
 
     profiles = get_card_profiles()
 
+    # A native HDMI stereo/surround profile means PCM (Default), not the
+    # app's explicit Stereo 2.0 direct sink. The latter is detected above by
+    # its own rpi_hdmi_audio_* sink name.
     for choice in CHOICES:
+        if choice.mode != MODE_PCM51:
+            continue
+
+        active_profile = profiles.get(choice.card)
+        if (
+            active_profile in (PROFILE_STEREO, PROFILE_PCM51)
+            and profiles.get(choice.other_card, "off") == "off"
+        ):
+            sink_name = normal_hdmi_sink_name(choice)
+            if sink_name is not None:
+                return replace(
+                    native_pcm_layout_choice(choice, active_profile),
+                    sink_name=sink_name,
+                )
+
+    for choice in CHOICES:
+        if choice.mode == MODE_PCM51:
+            continue
         if (
             profiles.get(choice.card) == choice.profile
             and profiles.get(choice.other_card, "off") == "off"
@@ -1776,7 +1911,10 @@ def release_normal_hdmi_cards() -> None:
 
 
 def enforce_encoder_output_visibility(choice: Choice) -> None:
-    """Keep normal HDMI profiles hidden while a direct encoder sink is active."""
+    """Keep normal HDMI profiles hidden while a direct app sink is active."""
+    if choice.mode == MODE_PCM51:
+        return
+
     if choice.sink_name not in get_sinks():
         return
 
@@ -1830,9 +1968,12 @@ def fully_release_real_hdmi() -> None:
     wait_until_hdmi_is_free()
 
 
-def load_choice_sink(choice: Choice) -> None:
+def load_choice_sink(choice: Choice) -> Choice:
+    if choice.mode == MODE_PCM51:
+        return activate_native_pcm(choice)
+
     last_error = "Unknown error."
-    attempt_limit = 1 if choice.mode == MODE_PCM51 else LOAD_RETRIES
+    attempt_limit = LOAD_RETRIES
 
     for attempt in range(1, attempt_limit + 1):
         result = run(
@@ -1860,7 +2001,7 @@ def load_choice_sink(choice: Choice) -> None:
         if result.returncode == 0 and module_id.isdigit():
             if wait_for_sink(choice.sink_name, SINK_TIMEOUT_SECONDS):
                 apply_channel_volumes_to_sink(choice)
-                return
+                return choice
 
             last_error = (
                 "The module was created, but its audio sink did not appear."
@@ -2099,7 +2240,12 @@ def _activate_choice_locked(choice: Choice) -> tuple[bool, str | None]:
     except Exception:
         pass
 
-    park_all_application_audio(choice)
+    holding_choice = (
+        native_pcm_layout_choice(choice)
+        if choice.mode == MODE_PCM51
+        else choice
+    )
+    park_all_application_audio(holding_choice)
     fully_release_real_hdmi()
 
     # IEC61937 receivers sometimes keep the previous Dolby/DTS lock briefly.
@@ -2111,25 +2257,25 @@ def _activate_choice_locked(choice: Choice) -> tuple[bool, str | None]:
     ):
         time.sleep(RECEIVER_RELEASE_SECONDS)
 
-    load_choice_sink(choice)
+    active_choice = load_choice_sink(choice)
 
     # Build the selected DSP path before any audio or encoded carrier is moved
     # to the new sink. On failure the previous direct volume path still works.
     filtered, filter_error = apply_audio_controls(
-        choice, allow_restart=True
+        active_choice, allow_restart=True
     )
 
-    if choice.mode in (MODE_AC3, MODE_DTS):
-        start_encoded_keepalive(choice)
+    if active_choice.mode in (MODE_AC3, MODE_DTS):
+        start_encoded_keepalive(active_choice)
         # Let the receiver lock to the fresh AC-3/DTS carrier before application
         # audio leaves the holding sink.
         time.sleep(KEEPALIVE_LEAD_SECONDS)
 
-    drain_holding_sink(choice.sink_name)
+    drain_holding_sink(active_choice.sink_name)
 
     time.sleep(0.10)
     remove_holding_sink()
-    enforce_encoder_output_visibility(choice)
+    enforce_encoder_output_visibility(active_choice)
     return filtered, filter_error
 
 
@@ -2143,13 +2289,14 @@ def _apply_choice_locked(choice: Choice) -> str:
 
     try:
         filtered, filter_error = activate_choice(choice)
+        active_choice = get_current_choice() or choice
 
-        enforce_encoder_output_visibility(choice)
+        enforce_encoder_output_visibility(active_choice)
 
         # v12 sometimes stayed silent until a Volume / channel slider was moved.
         # Perform that wake-up automatically after the final graph is in place.
         time.sleep(0.10)
-        wake_selected_output(choice, filtered=filtered)
+        wake_selected_output(active_choice, filtered=filtered)
         # Only commit the selected output after its full switch has succeeded.
         save_audio_state(choice)
         if filter_error:
@@ -2169,19 +2316,19 @@ def _apply_choice_locked(choice: Choice) -> str:
 
         if previous is not None:
             try:
-                load_choice_sink(previous)
-                apply_audio_controls(previous, allow_restart=True)
+                restored_choice = load_choice_sink(previous)
+                apply_audio_controls(restored_choice, allow_restart=True)
 
-                if previous.mode in (MODE_AC3, MODE_DTS):
+                if restored_choice.mode in (MODE_AC3, MODE_DTS):
                     start_encoded_keepalive(
-                        previous
+                        restored_choice
                     )
                     time.sleep(
                         KEEPALIVE_LEAD_SECONDS
                     )
 
-                set_default_sink(previous.sink_name)
-                drain_holding_sink(previous.sink_name)
+                set_default_sink(restored_choice.sink_name)
+                drain_holding_sink(restored_choice.sink_name)
                 remove_holding_sink()
             except Exception:
                 pass
@@ -2431,7 +2578,6 @@ class AudioWindow(Adw.ApplicationWindow):
         self.last_local_volume_change_at = 0.0
         self.syncing_volume_ui = False
         self.hdmi_connected: dict[str, bool] = {}
-        self.pcm_detection_labels: dict[str, Gtk.Label] = {}
         self.hdmi_uevent_socket: socket.socket | None = None
         self.hdmi_uevent_source_id = 0
         self.hdmi_rescan_source_id = 0
@@ -2499,14 +2645,6 @@ class AudioWindow(Adw.ApplicationWindow):
                 first_button = button
             else:
                 button.set_group(first_button)
-
-            if choice.mode == MODE_PCM51:
-                detection_label = Gtk.Label()
-                detection_label.set_markup("<i>Not detected</i>")
-                detection_label.add_css_class("caption")
-                detection_label.add_css_class("dim-label")
-                row.add_suffix(detection_label)
-                self.pcm_detection_labels[choice.key] = detection_label
 
             row.add_suffix(button)
             row.connect("activated", self.on_row_activated, choice)
@@ -2699,16 +2837,6 @@ class AudioWindow(Adw.ApplicationWindow):
             )
 
         self.set_rows_sensitive(not self.switch_locked)
-
-        for choice_key in ("hdmi0-pcm51", "hdmi1-pcm51"):
-            choice = CHOICE_BY_KEY[choice_key]
-            detected = (
-                self.hdmi_connected[choice.card]
-                and hdmi_pcm51_capability(choice) is True
-            )
-            self.pcm_detection_labels[choice_key].set_markup(
-                "<i>Detected</i>" if detected else "<i>Not detected</i>"
-            )
 
         return False
 
@@ -3353,7 +3481,7 @@ def restore_saved_choice() -> int:
 
 
 def _restore_saved_choice_locked() -> int:
-    choice = load_choice_state() or CHOICE_BY_KEY["hdmi0-stereo"]
+    choice = load_choice_state() or CHOICE_BY_KEY["hdmi0-pcm51"]
     reload_volume_state_from_disk()
 
     if not wait_for_audio_stack(
@@ -3370,9 +3498,10 @@ def _restore_saved_choice_locked() -> int:
         try:
             write_frequency_filter_config()
             filtered, _ = activate_choice(choice)
-            enforce_encoder_output_visibility(choice)
+            active_choice = get_current_choice() or choice
+            enforce_encoder_output_visibility(active_choice)
             time.sleep(0.10)
-            wake_selected_output(choice, filtered=filtered)
+            wake_selected_output(active_choice, filtered=filtered)
             save_audio_state(choice)
 
             return 0
