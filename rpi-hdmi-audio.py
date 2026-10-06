@@ -29,7 +29,7 @@ from gi.repository import Adw, Gio, GLib, Gtk
 APP_ID = "org.wobbo.RPiHDMIAudio"
 # Update both values for every released change to this script.
 APP_VERSION = "16.5"
-APP_VERSION_DATE = "2026-10-06 13:26"
+APP_VERSION_DATE = "2026-10-06 14:31"
 DSP_CONFIG_REVISION = "16.5-pcm-default"
 STATE_DIR = Path.home() / ".local" / "state" / "rpi-hdmi-audio"
 STATE_FILE = STATE_DIR / "last-choice"
@@ -48,14 +48,21 @@ POST_SWITCH_WAKE_RETRIES = 3
 POST_SWITCH_WAKE_DELAY_SECONDS = 0.16
 POST_SWITCH_NUDGE_HOLD_SECONDS = 0.05
 
+# Raspberry Pi 5 / 500+ expose the two HDMI audio controllers with stable
+# PipeWire card names. The application refers to them as HDMI 0 and HDMI 1.
 CARD0 = "alsa_card.platform-107c701400.hdmi"
 CARD1 = "alsa_card.platform-107c706400.hdmi"
 
+# Native PipeWire profiles. PCM (Default) deliberately uses these normal
+# desktop profiles instead of creating its own direct ALSA sink.
 PROFILE_STEREO = "output:hdmi-stereo"
 PROFILE_PCM51 = "output:hdmi-surround"
 PROFILE_AC3 = "output:hdmi-ac3"
 PROFILE_DTS = "output:hdmi-dts"
 
+# Internal mode identifiers. MODE_PCM51 keeps its historical state-file name
+# for upgrade compatibility, but from v16.5 it means PCM (Default): native
+# PipeWire stereo or native 5.1 depending on the connected HDMI device.
 MODE_STEREO = "stereo"
 MODE_PCM51 = "pcm51"
 MODE_AC3 = "ac3"
@@ -203,6 +210,9 @@ class Choice:
     mmap: bool = True
 
 
+# The GUI choices are static, while PCM (Default) is resolved dynamically.
+# Its Choice object starts with the six-channel template because the actual
+# native channel layout is replaced later by native_pcm_layout_choice().
 CHOICES = (
     Choice(
         key="hdmi0-stereo",
@@ -629,6 +639,8 @@ def frequency_values_for_channel(
 
 
 def frequency_filter_kind(choice: Choice) -> str:
+    # PCM (Default) reaches this function with its runtime channel count already
+    # resolved, so the same Frequency Balance code works for native 2.0 and 5.1.
     return "stereo" if choice.channels == 2 else "surround"
 
 
@@ -1268,7 +1280,12 @@ def native_pcm_layout_choice(
     choice: Choice,
     profile: str | None = None,
 ) -> Choice:
-    """Return the channel layout used by the normal PipeWire HDMI profile."""
+    """Return a runtime Choice that matches the active native HDMI profile.
+
+    The saved GUI choice stays PCM (Default). This helper only adapts the
+    runtime sink layout to two or six channels so Volume and Frequency Balance
+    use the same channel count as PipeWire.
+    """
     selected_profile = profile
     if selected_profile not in (PROFILE_STEREO, PROFILE_PCM51):
         selected_profile = (
@@ -1297,7 +1314,12 @@ def native_pcm_layout_choice(
 
 
 def normal_hdmi_sink_name(choice: Choice) -> str | None:
-    """Return the native PipeWire sink belonging to this Raspberry Pi HDMI port."""
+    """Find the normal PipeWire sink for the selected physical HDMI port.
+
+    Direct Stereo/Dolby/DTS sinks use project-specific names. Native PCM sinks
+    are created by WirePlumber, so they are identified by the HDMI controller
+    address instead of by an application-owned sink name.
+    """
     needle = "107c701400" if choice.card == CARD0 else "107c706400"
 
     for sink_name in get_sinks():
@@ -1311,6 +1333,7 @@ def wait_for_normal_hdmi_sink(
     choice: Choice,
     timeout_seconds: float = SINK_TIMEOUT_SECONDS,
 ) -> str | None:
+    """Wait briefly for WirePlumber to expose the native sink after a profile change."""
     deadline = time.monotonic() + timeout_seconds
 
     while time.monotonic() < deadline:
@@ -1325,9 +1348,14 @@ def wait_for_normal_hdmi_sink(
 def activate_native_pcm(choice: Choice) -> Choice:
     """Return HDMI to the normal PipeWire/WirePlumber PCM path.
 
-    Prefer the native 5.1 profile when ELD explicitly advertises six-channel
-    LPCM. If that profile is unavailable or fails to open, fall back to the
-    normal native stereo profile. No custom module-alsa-sink is created.
+    PCM (Default) is intentionally different from the explicit Stereo 2.0 mode:
+    it does not open the ALSA device directly. WirePlumber owns the HDMI device
+    again and exposes the normal desktop sink.
+
+    When kernel ELD data explicitly reports six-channel LPCM support, the app
+    first tries the native surround profile. If that profile is unavailable,
+    or if the device does not advertise it, native stereo is used instead.
+    No custom module-alsa-sink is created for PCM (Default).
     """
     preferred = (
         PROFILE_PCM51
@@ -1377,6 +1405,12 @@ def activate_native_pcm(choice: Choice) -> Choice:
 
 
 def get_current_choice() -> Choice | None:
+    """Translate the current PipeWire graph back to one of the GUI choices.
+
+    Project-owned direct sinks identify Stereo, Dolby and DTS immediately.
+    PCM (Default) is special because its sink belongs to WirePlumber, so it is
+    recognised from the active native HDMI profile plus the physical port.
+    """
     sinks = get_sinks()
 
     for sink_name, choice in CHOICE_BY_SINK.items():
@@ -2229,6 +2263,13 @@ def activate_choice(choice: Choice) -> tuple[bool, str | None]:
 
 
 def _activate_choice_locked(choice: Choice) -> tuple[bool, str | None]:
+    """Perform one complete output switch while the global audio lock is held.
+
+    Application streams are temporarily parked, the previous HDMI owner is
+    released, the new direct or native output is created, DSP is attached, and
+    finally the streams are moved back. This prevents browsers and games from
+    losing their audio stream while the physical HDMI device changes owner.
+    """
     previous = get_current_choice()
 
     # A smart filter that still targets the old sink can keep links alive while
@@ -2577,6 +2618,11 @@ class AudioWindow(Adw.ApplicationWindow):
         self.control_update_requested = False
         self.last_local_volume_change_at = 0.0
         self.syncing_volume_ui = False
+        # The audio stack can still be settling when the window opens directly
+        # after a fresh install. Retry detection briefly instead of showing an
+        # unselected list immediately. This affects only the GUI; it does not
+        # delay installation or change the selected audio mode.
+        self.initial_refresh_retries = 0
         self.hdmi_connected: dict[str, bool] = {}
         self.hdmi_uevent_socket: socket.socket | None = None
         self.hdmi_uevent_source_id = 0
@@ -2675,21 +2721,8 @@ class AudioWindow(Adw.ApplicationWindow):
         info_text.set_hexpand(True)
         info_footer.append(info_text)
 
-        info_title = Gtk.Label()
-        info_title.set_markup("<b>PCM (Default) / Stereo / Dolby Digital / DTS</b>")
-        info_title.set_xalign(0.0)
-        info_title.set_wrap(True)
-        info_text.append(info_title)
-
         info_body = Gtk.Label()
-        info_body.set_markup(
-            "PCM (Default) follows the normal PipeWire / HDMI capability. "
-            "Stereo 2.0 forces two-channel PCM. "
-            "Dolby Digital / DTS require a decoder. "
-            "Unsupported modes may produce no audio or digital noise. "
-            f"Version&#160;{APP_VERSION}&#160;"
-            f"<i>{APP_VERSION_DATE.replace(' ', '&#160;')}</i>"
-        )
+        info_body.set_markup(f"Dolby Digital and DTS require a compatible receiver or decoder. Unsupported modes may produce loud digital noise. Version&#160;{APP_VERSION}&#160;<i>{APP_VERSION_DATE.replace(' ', '&#160;')}</i>")
         info_body.set_xalign(0.0)
         info_body.set_wrap(True)
         info_body.add_css_class("dim-label")
@@ -3123,14 +3156,29 @@ class AudioWindow(Adw.ApplicationWindow):
         button.set_active(True)
 
     def refresh(self) -> bool:
+        """Refresh only the visible selection/status; never change audio here.
+
+        Immediately after installation PipeWire may still be exposing the
+        native PCM sink. A few short GUI-only retries avoid showing all radio
+        buttons unselected during that startup window. The installer itself
+        never waits for this and no audio mode is changed by the retry.
+        """
         try:
             current = get_current_choice()
 
             if current is None:
+                if self.initial_refresh_retries < 6:
+                    self.initial_refresh_retries += 1
+                    self.status.set_subtitle("Detecting active audio output…")
+                    GLib.timeout_add(250, self.refresh)
+                    return False
+
                 self.status.set_subtitle(
                     "No active RPi HDMI Audio output found."
                 )
                 return False
+
+            self.initial_refresh_retries = 0
 
             if frequency_filter_is_active(current) or not dsp_requested(current):
                 self.status.set_subtitle(f"Active: {current.title}")
@@ -3482,6 +3530,12 @@ def restore_saved_choice() -> int:
 
 
 def _restore_saved_choice_locked() -> int:
+    """Restore the last saved output after login.
+
+    On a fresh installation there is no previous state, so PCM (Default) on
+    HDMI 0 is used. The same restore path handles native PCM and the three
+    direct modes, keeping startup behavior consistent across reboots.
+    """
     choice = load_choice_state() or CHOICE_BY_KEY["hdmi0-pcm51"]
     reload_volume_state_from_disk()
 
