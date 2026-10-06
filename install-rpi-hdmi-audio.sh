@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# HDMI Audio Encoder 16.5 installer
+# HDMI Audio Encoder 16.6 installer
 # Raspberry Pi OS / Debian 13 GNOME
 #
 # This installer:
-#   1. validates the desktop user and the matching v16.5 Python application;
+#   1. validates the desktop user and the matching v16.6 Python application;
 #   2. installs GTK, PipeWire, WirePlumber, ALSA and build dependencies;
 #   3. installs or reuses the DTS/dcaenc ALSA plugin;
 #   4. enables the IEC61937 DTS path used by the application;
@@ -80,7 +80,7 @@ fi
 # GTK4/libadwaita provide the GUI, PipeWire/WirePlumber provide desktop audio,
 # ALSA provides HDMI/codec access, and the build tools are only needed when the
 # DTS plugin has to be compiled locally.
-printf 'Installing HDMI Audio Encoder 16.5...\n'
+printf 'Installing HDMI Audio Encoder 16.6...\n'
 apt-get update -qq
 apt-get install -y -qq \
     python3 python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 \
@@ -89,7 +89,7 @@ apt-get install -y -qq \
     git build-essential autoconf automake libtool pkg-config
 
 # Parse the Python source before installing it. This prevents accidentally
-# pairing a v16.5 installer with an older application file.
+# pairing a v16.6 installer with an older application file.
 python3 - "$APP_SOURCE" <<'PY'
 import ast
 import pathlib
@@ -101,8 +101,8 @@ version = next((n.value.value for n in tree.body if isinstance(n, ast.Assign)
 revision = next((n.value.value for n in tree.body if isinstance(n, ast.Assign)
                  and any(isinstance(t, ast.Name) and t.id == 'DSP_CONFIG_REVISION'
                          for t in n.targets) and isinstance(n.value, ast.Constant)), None)
-if version != '16.5' or revision != '16.5-pcm-default':
-    raise SystemExit('rpi-hdmi-audio.py must be the matching v16.5 build.')
+if version != '16.6' or revision != '16.6-pcm-default':
+    raise SystemExit('rpi-hdmi-audio.py must be the matching v16.6 build.')
 PY
 
 # Create root-owned project metadata directories. They store only installation
@@ -242,7 +242,7 @@ STATE_FILE="$STATE_DIR/last-choice"
 
 # Preserve the saved Volume/Frequency lines during upgrades. If there is no
 # existing state yet, use hdmi0-pcm51 as the internal key for PCM (Default).
-# In v16.5 that key now means native PipeWire PCM, not a forced six-channel sink.
+# In v16.6 that key means native PipeWire PCM, not a forced six-channel sink.
 active_choice=
 if session_live; then
     case $(user_cmd pactl get-default-sink 2>/dev/null || true) in
@@ -333,4 +333,4 @@ if [[ -S /run/user/$TARGET_UID/bus ]]; then
     fi
 fi
 
-printf 'Complete: version 16.5. PCM (Default) is the initial mode on a fresh installation.\n'
+printf 'Complete: version 16.6. PCM (Default) is the initial mode on a fresh installation.\n'
