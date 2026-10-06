@@ -20,7 +20,7 @@ sudo apt install ./hdmi-audio-encoder_16.5-1_arm64.deb
 
 ### GNOME download: 
 
-[<img height="16" alt="hdmi-audio-encoder" src="https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.5/hdmi-audio-encoder_1024x1024.png" />](https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.5/hdmi-audio-encoder_16.5-1_arm64.deb) [hdmi-audio-encoder_16.4-1_arm64.deb](https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.5/hdmi-audio-encoder_16.5-1_arm64.deb)
+[<img height="16" alt="hdmi-audio-encoder" src="https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.4/hdmi-audio-encoder_1024x1024.png" />](https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.5/hdmi-audio-encoder_16.5-1_arm64.deb) [hdmi-audio-encoder_16.4-1_arm64.deb](https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.5/hdmi-audio-encoder_16.5-1_arm64.deb)
 
 
 
@@ -143,7 +143,7 @@ It has been tested with:
 Applications do not need special Dolby Digital or DTS support themselves. The application provides PCM audio to PipeWire and RPi HDMI Audio performs the real-time encoding when Dolby Digital or DTS is selected.
 
 ## Netflix 5.1
-
+hdmi-audio-encoder_16.5-1_arm64.deb
 **Netflix 5.1 has been tested and works.**
 
 On Chrome/Chromium I use the **New Netflix 1080p** extension:
