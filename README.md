@@ -18,9 +18,9 @@ sudo apt install ./hdmi-audio-encoder_16.5-1_arm64.deb
 
 
 
-### GNOME download: 
+### GNOME download DEB: 
 
-[<img height="16" alt="[hdmi-audio-encoder" src="https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.4/hdmi-audio-encoder_1024x1024.png](https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.5/hdmi-audio-encoder.png)" />](https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.5/hdmi-audio-encoder_16.5-1_arm64.deb) [hdmi-audio-encoder_16.5-1_arm64.deb](https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.5/hdmi-audio-encoder_16.5-1_arm64.deb)
+[<img height="16" src="https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.5/hdmi-audio-encoder.png" />](https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.5/hdmi-audio-encoder_16.5-1_arm64.deb) [hdmi-audio-encoder_16.5-1_arm64.deb](https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.5/hdmi-audio-encoder_16.5-1_arm64.deb)
 
 
 
