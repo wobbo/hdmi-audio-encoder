@@ -12,15 +12,15 @@ It also provides independent speaker levels, per-speaker frequency balance and G
 
 ### Terminal:
 ```bash
-wget https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.4/hdmi-audio-encoder_16.4-1_arm64.deb
-sudo apt install ./hdmi-audio-encoder_16.4-1_arm64.deb
+wget https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.5/hdmi-audio-encoder_16.5-1_arm64.deb
+sudo apt install ./hdmi-audio-encoder_16.5-1_arm64.deb
 ```
 
 
 
 ### GNOME download: 
 
-[<img height="16" alt="hdmi-audio-encoder" src="https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.4/hdmi-audio-encoder_1024x1024.png" />](https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.4/hdmi-audio-encoder_16.4-1_arm64.deb) [hdmi-audio-encoder_16.4-1_arm64.deb](https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.4/hdmi-audio-encoder_16.4-1_arm64.deb)
+[<img height="16" alt="hdmi-audio-encoder" src="https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.5/hdmi-audio-encoder_1024x1024.png" />](https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.5/hdmi-audio-encoder_16.5-1_arm64.deb) [hdmi-audio-encoder_16.4-1_arm64.deb](https://github.com/wobbo/hdmi-audio-encoder/releases/download/v16.5/hdmi-audio-encoder_16.5-1_arm64.deb)
 
 
 
