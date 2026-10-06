@@ -207,7 +207,7 @@ if session_live; then
     esac
 fi
 if [[ -n $active_choice || ! -s $STATE_FILE ]]; then
-    { printf '%s\n' "${active_choice:-hdmi0-stereo}"
+    { printf '%s\n' "${active_choice:-hdmi0-pcm51}"
       [[ ! -f $STATE_FILE ]] || tail -n +2 "$STATE_FILE"
     } > "$STATE_FILE.install-tmp"
     mv -f "$STATE_FILE.install-tmp" "$STATE_FILE"
@@ -259,7 +259,7 @@ cat > /usr/share/applications/rpi-hdmi-audio.desktop <<'DESKTOP'
 Version=1.0
 Type=Application
 Name=HDMI Audio Encoder
-Comment=Choose HDMI stereo, PCM 5.1, Dolby Digital or DTS with Frequency Balance
+Comment=Choose PCM Default, Stereo 2.0, Dolby Digital or DTS with Frequency Balance
 Exec=/usr/local/bin/rpi-hdmi-audio
 Icon=audio-card
 Terminal=false
@@ -299,4 +299,4 @@ if [[ -S /run/user/$TARGET_UID/bus ]]; then
     fi
 fi
 
-printf 'Gereed: versie 16.4 herzien. Open HDMI Audio Encoder via het applicatiemenu.\n'
+printf 'Gereed: versie 16.4 herzien. PCM (Default) is de standaard bij een verse installatie.\n'
