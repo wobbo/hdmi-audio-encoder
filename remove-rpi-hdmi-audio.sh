@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# HDMI Audio Encoder 16.5 remover
+# HDMI Audio Encoder 16.6 remover
 # Remove this application and restore native desktop audio.
 # Run from a logged-in GNOME desktop account:
 #   sudo ./remove-rpi-hdmi-audio.sh
