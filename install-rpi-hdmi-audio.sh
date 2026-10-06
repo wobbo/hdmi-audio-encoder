@@ -242,7 +242,7 @@ STATE_FILE="$STATE_DIR/last-choice"
 
 # Preserve the saved Volume/Frequency lines during upgrades. If there is no
 # existing state yet, use hdmi0-pcm51 as the internal key for PCM (Default).
-# In v16.5 that key now means native PipeWire PCM, not a forced six-channel sink.
+# In v16.5 that key means native PipeWire PCM, not a forced six-channel sink.
 active_choice=
 if session_live; then
     case $(user_cmd pactl get-default-sink 2>/dev/null || true) in
