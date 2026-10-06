@@ -28,9 +28,9 @@ from gi.repository import Adw, Gio, GLib, Gtk
 
 APP_ID = "org.wobbo.RPiHDMIAudio"
 # Update both values for every released change to this script.
-APP_VERSION = "16.4"
-APP_VERSION_DATE = "2026-09-26 09:21"
-DSP_CONFIG_REVISION = "16.4-herzien"
+APP_VERSION = "16.5"
+APP_VERSION_DATE = "2026-10-06 13:26"
+DSP_CONFIG_REVISION = "16.5-pcm-default"
 STATE_DIR = Path.home() / ".local" / "state" / "rpi-hdmi-audio"
 STATE_FILE = STATE_DIR / "last-choice"
 OPERATION_LOCK_FILE = STATE_DIR / "audio-operation.lock"
@@ -2676,14 +2676,15 @@ class AudioWindow(Adw.ApplicationWindow):
         info_footer.append(info_text)
 
         info_title = Gtk.Label()
-        info_title.set_markup("<b>PCM / Dolby Digital / DTS 5.1</b>")
+        info_title.set_markup("<b>PCM (Default) / Stereo / Dolby Digital / DTS</b>")
         info_title.set_xalign(0.0)
         info_title.set_wrap(True)
         info_text.append(info_title)
 
         info_body = Gtk.Label()
         info_body.set_markup(
-            "PCM 5.1 requires supported HDMI hardware. "
+            "PCM (Default) follows the normal PipeWire / HDMI capability. "
+            "Stereo 2.0 forces two-channel PCM. "
             "Dolby Digital / DTS require a decoder. "
             "Unsupported modes may produce no audio or digital noise. "
             f"Version&#160;{APP_VERSION}&#160;"
